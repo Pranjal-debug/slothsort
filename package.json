@@ -1,0 +1,27 @@
+{
+  "name": "slothsort",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "SlothSort — Privacy-first Windows desktop AI file organizer (Hacktoberfest 2026)",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "prototype": "tsx src/index.ts",
+    "test": "tsx src/evaluator.ts",
+    "test:validator": "tsx src/testValidator.ts"
+  },
+  "keywords": [
+    "file-organizer",
+    "local-ai",
+    "privacy-first",
+    "ollama",
+    "electron"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
