@@ -11,12 +11,43 @@ export interface RawInferenceResult {
   metrics: InferenceMetrics;
 }
 
+export class OllamaConnectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OllamaConnectionError';
+  }
+}
+
+export class OllamaTimeoutError extends Error {
+  constructor(message = 'Inference request timed out.') {
+    super(message);
+    this.name = 'OllamaTimeoutError';
+  }
+}
+
+export class OllamaModelNotFoundError extends Error {
+  constructor(model: string) {
+    super(`Model "${model}" is not installed in the local Ollama library.`);
+    this.name = 'OllamaModelNotFoundError';
+  }
+}
+
+export class OllamaInferenceError extends Error {
+  public statusCode?: number;
+  constructor(message: string, statusCode?: number) {
+    super(message);
+    this.name = 'OllamaInferenceError';
+    this.statusCode = statusCode;
+  }
+}
+
 export class OllamaClient {
   private baseUrl: string;
   private model: string;
   private temperature: number;
 
   constructor(config: OllamaClientConfig) {
+    // Strictly local loopback default
     this.baseUrl = config.baseUrl || 'http://127.0.0.1:11434';
     this.model = config.model;
     this.temperature = config.temperature ?? 0.1;
@@ -28,7 +59,7 @@ export class OllamaClient {
   async checkHealth(): Promise<{ isHealthy: boolean; version?: string; error?: string }> {
     try {
       const response = await fetch(`${this.baseUrl}/api/version`, {
-        signal: AbortSignal.timeout(3000)
+        signal: AbortSignal.timeout(4000)
       });
       if (!response.ok) {
         return { isHealthy: false, error: `HTTP ${response.status}: ${response.statusText}` };
@@ -55,6 +86,16 @@ export class OllamaClient {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Verifies that the configured model is installed locally.
+   */
+  async verifyModelInstalled(): Promise<boolean> {
+    const models = await this.listLocalModels();
+    return models.some(
+      (m) => m === this.model || m.startsWith(`${this.model}:`)
+    );
   }
 
   /**
@@ -121,55 +162,94 @@ ${contextItems.join('\n')}
   }
 
   /**
-   * Executes inference via the local Ollama /api/generate endpoint.
+   * Executes inference via the local Ollama /api/generate endpoint with bounded timeout and cancellation.
    */
-  async classify(metadata: FileMetadata): Promise<RawInferenceResult> {
+  async classify(
+    metadata: FileMetadata,
+    options?: { signal?: AbortSignal; timeoutMs?: number }
+  ): Promise<RawInferenceResult> {
     const prompt = this.buildPrompt(metadata);
     const startTime = performance.now();
+    const timeoutMs = options?.timeoutMs ?? 90000;
 
-    const response = await fetch(`${this.baseUrl}/api/generate`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: this.model,
-        prompt,
-        stream: false,
-        format: 'json',
-        options: {
-          temperature: this.temperature
-        }
-      })
-    });
+    // Compose timeout signal with caller signal
+    const timeoutController = new AbortController();
+    const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
 
-    const totalDurationMs = Math.round(performance.now() - startTime);
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Ollama inference failed [HTTP ${response.status}]: ${errText}`);
+    let abortListener: (() => void) | undefined;
+    if (options?.signal) {
+      abortListener = () => timeoutController.abort();
+      options.signal.addEventListener('abort', abortListener);
     }
 
-    const data = await response.json() as {
-      response: string;
-      total_duration?: number;
-      prompt_eval_duration?: number;
-      eval_duration?: number;
-      prompt_eval_count?: number;
-      eval_count?: number;
-    };
+    try {
+      const response = await fetch(`${this.baseUrl}/api/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: this.model,
+          prompt,
+          stream: false,
+          format: 'json',
+          options: {
+            temperature: this.temperature
+          }
+        }),
+        signal: timeoutController.signal
+      });
 
-    const metrics: InferenceMetrics = {
-      totalDurationMs,
-      promptEvalDurationMs: data.prompt_eval_duration ? Math.round(data.prompt_eval_duration / 1e6) : undefined,
-      evalDurationMs: data.eval_duration ? Math.round(data.eval_duration / 1e6) : undefined,
-      promptTokens: data.prompt_eval_count,
-      completionTokens: data.eval_count
-    };
+      const totalDurationMs = Math.round(performance.now() - startTime);
 
-    return {
-      rawText: data.response,
-      metrics
-    };
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        throw new OllamaInferenceError(
+          `Ollama inference failed [HTTP ${response.status}]: ${errText}`,
+          response.status
+        );
+      }
+
+      const data = await response.json() as {
+        response: string;
+        total_duration?: number;
+        prompt_eval_duration?: number;
+        eval_duration?: number;
+        prompt_eval_count?: number;
+        eval_count?: number;
+      };
+
+      const metrics: InferenceMetrics = {
+        totalDurationMs,
+        promptEvalDurationMs: data.prompt_eval_duration ? Math.round(data.prompt_eval_duration / 1e6) : undefined,
+        evalDurationMs: data.eval_duration ? Math.round(data.eval_duration / 1e6) : undefined,
+        promptTokens: data.prompt_eval_count,
+        completionTokens: data.eval_count
+      };
+
+      return {
+        rawText: data.response,
+        metrics
+      };
+    } catch (err: unknown) {
+      if (options?.signal?.aborted) {
+        const cancelErr = new Error('Inference cancelled by user.');
+        cancelErr.name = 'AbortError';
+        throw cancelErr;
+      }
+      if (timeoutController.signal.aborted) {
+        throw new OllamaTimeoutError(`Inference timed out after ${timeoutMs}ms.`);
+      }
+      if (err instanceof OllamaInferenceError) {
+        throw err;
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new OllamaConnectionError(`Cannot reach Ollama daemon at ${this.baseUrl}: ${msg}`);
+    } finally {
+      clearTimeout(timer);
+      if (options?.signal && abortListener) {
+        options.signal.removeEventListener('abort', abortListener);
+      }
+    }
   }
 }

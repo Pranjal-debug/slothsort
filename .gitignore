@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
 
 # Build outputs
 dist/
@@ -30,6 +29,8 @@ logs/
 *.log
 test-results/
 coverage/
+temp_*/
+*.tmp.*
 
 # OS generated files
 Thumbs.db
