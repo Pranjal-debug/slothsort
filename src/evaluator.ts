@@ -12,6 +12,9 @@ export interface EvaluationSummary {
   structuredOutputRatePct: number;
   correctCategoryCount: number;
   classificationAccuracyPct: number;
+  strictCorrectCount: number;
+  strictAccuracyPct: number;
+  averageTokensPerSec?: number;
   coldStartLatencyMs: number;
   warmAverageLatencyMs: number;
   warmMedianLatencyMs: number;
@@ -158,6 +161,7 @@ export async function runEvaluation(modelName: string = 'gemma3:4b'): Promise<Ev
   // --- Step D: Metric Aggregation ---
   const validStructureCount = results.filter((r) => r.validation.isValid).length;
   const correctCategoryCount = results.filter((r) => r.isCorrectCategory).length;
+  const strictCorrectCount = results.filter((r) => r.validation.isValid && r.validation.sanitized?.category === r.testCase.expectedCategory).length;
   const validJsonCount = results.filter((r) => r.parsedResponse !== null && r.parsedResponse !== undefined).length;
 
   const warmAvgLatency = warmLatencies.length > 0
@@ -170,6 +174,14 @@ export async function runEvaluation(modelName: string = 'gemma3:4b'): Promise<Ev
     : 0;
   const minWarm = sortedWarm.length > 0 ? sortedWarm[0] : 0;
   const maxWarm = sortedWarm.length > 0 ? sortedWarm[sortedWarm.length - 1] : 0;
+
+  // Calculate average token generation speed (eval_count / eval_duration)
+  const tokenSpeeds = results
+    .filter((r) => r.metrics.completionTokens && r.metrics.evalDurationMs && r.metrics.evalDurationMs > 0)
+    .map((r) => (r.metrics.completionTokens! / (r.metrics.evalDurationMs! / 1000)));
+  const averageTokensPerSec = tokenSpeeds.length > 0
+    ? Math.round((tokenSpeeds.reduce((a, b) => a + b, 0) / tokenSpeeds.length) * 10) / 10
+    : undefined;
 
   const failures: EvaluationSummary['failures'] = [];
   for (const r of results) {
@@ -200,6 +212,9 @@ export async function runEvaluation(modelName: string = 'gemma3:4b'): Promise<Ev
     structuredOutputRatePct: Math.round((validStructureCount / results.length) * 100),
     correctCategoryCount,
     classificationAccuracyPct: Math.round((correctCategoryCount / results.length) * 100),
+    strictCorrectCount,
+    strictAccuracyPct: Math.round((strictCorrectCount / results.length) * 100),
+    averageTokensPerSec,
     coldStartLatencyMs: coldStartLatency,
     warmAverageLatencyMs: warmAvgLatency,
     warmMedianLatencyMs: warmMedian,
@@ -229,7 +244,11 @@ function printSummary(s: EvaluationSummary) {
   console.log(`Model Identifier:                 ${s.modelName}`);
   console.log(`Total Test Cases:                 ${s.totalCases}`);
   console.log(`Valid Structured Output Rate:     ${s.structuredOutputRatePct}% (${s.validStructureCount}/${s.totalCases})`);
-  console.log(`Classification Accuracy:          ${s.classificationAccuracyPct}% (${s.correctCategoryCount}/${s.totalCases})`);
+  console.log(`Classification Accuracy (Strict): ${s.strictAccuracyPct}% (${s.strictCorrectCount}/${s.totalCases})`);
+  console.log(`Classification Accuracy (Tolerant): ${s.classificationAccuracyPct}% (${s.correctCategoryCount}/${s.totalCases})`);
+  if (s.averageTokensPerSec !== undefined) {
+    console.log(`Generation Speed:                 ${s.averageTokensPerSec} tokens/sec`);
+  }
   console.log(`Cold Start Latency (1st request): ${s.coldStartLatencyMs} ms`);
   console.log(`Warm Average Latency:             ${s.warmAverageLatencyMs} ms`);
   console.log(`Warm Median Latency:              ${s.warmMedianLatencyMs} ms (Range: ${s.minWarmLatencyMs}ms - ${s.maxWarmLatencyMs}ms)`);
@@ -249,11 +268,9 @@ function printSummary(s: EvaluationSummary) {
   console.log('='.repeat(70) + '\n');
 }
 
-// If executed directly
-if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`) {
-  const targetModel = process.argv[2] || process.env.SLOTHSORT_MODEL || 'gemma3:4b';
-  runEvaluation(targetModel).catch((err) => {
-    console.error('Fatal evaluation error:', err);
-    process.exit(1);
-  });
-}
+// Run evaluation
+const targetModel = process.argv[2] || process.env.SLOTHSORT_MODEL || 'gemma3:4b';
+runEvaluation(targetModel).catch((err) => {
+  console.error('Fatal evaluation error:', err);
+  process.exit(1);
+});

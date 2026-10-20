@@ -8,7 +8,8 @@
     "build": "tsc",
     "prototype": "tsx src/index.ts",
     "test": "tsx src/evaluator.ts",
-    "test:validator": "tsx src/testValidator.ts"
+    "test:validator": "tsx src/testValidator.ts",
+    "test:offline": "tsx src/testOffline.ts"
   },
   "keywords": [
     "file-organizer",
