@@ -57,7 +57,7 @@ Every action requires explicit human review and approval, and every file operati
 
 ### Step 2: Download & Launch SlothSort
 
-1. Download the release package (`SlothSort-v0.1.0-win-x64.zip`) from the repository release page.
+1. Download the release package (`SlothSort-v0.1.1-win-x64.zip`) from the repository release page.
 2. Extract the ZIP archive to a folder of your choice.
 3. Double-click `SlothSort.exe`.
    > **Note on Windows SmartScreen:** Because SlothSort is an open-source project without an expensive commercial Authenticode certificate, Windows Defender SmartScreen may display an *"Unrecognized app"* warning on initial run. Click **"More info"** and then **"Run anyway"**.
@@ -148,10 +148,10 @@ npm run dev
 npm start
 ```
 
-### Running Automated Test Suites (152 Tests)
-SlothSort includes 5 comprehensive, non-destructive test suites (**100% pass rate**):
+### Running Automated Test Suites (162 Deterministic Tests)
+SlothSort includes 6 comprehensive, non-destructive test suites (**100% pass rate**):
 ```bash
-# Run all unit and component tests (113 tests)
+# Run all deterministic unit, integration, lifecycle, and hardening tests (162 tests)
 npm test
 
 # Run individual test suites:
@@ -160,8 +160,9 @@ npm run test:scanner     # 22 tests: Boundary containment & secret exclusions
 npm run test:queue       # 22 tests: Sequential FIFO worker & concurrency
 npm run test:executor    # 40 tests: Approval contracts, collisions, undo & journal
 npm run test:audit       # 39 tests: Full end-to-end lifecycle & crash recovery
+npm run test:hardening   # 10 tests: Symlink boundaries, fingerprint, review, privacy, and package checks
 
-# Run offline loopback verification
+# Run live loopback verification (requires Ollama and gemma3:4b)
 npm run test:offline
 ```
 
@@ -198,7 +199,7 @@ slothsort/
 │   ├── ollamaClient.ts       # Loopback HTTP client for Ollama daemon
 │   ├── validator.ts          # Programmatic schema & Windows filename sanitizer
 │   └── types.ts              # Shared domain models & IPC interfaces
-├── test/                     # Automated test suites (152 tests)
+├── test/                     # Automated test suites (162 deterministic tests)
 ├── scripts/                  # E2E validation & Phase 3B audit drivers
 ├── artifacts/                # Validation reports, manifests & screenshots
 ├── package.json

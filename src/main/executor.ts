@@ -52,7 +52,7 @@ export class FileExecutor {
 
   /**
    * Safely moves a file from sourcePath to destinationPath.
-   * Handles same-volume atomic renames as well as cross-volume verified copy-and-delete.
+   * Handles same-volume no-overwrite links as well as cross-volume verified copy-and-delete.
    * Never deletes source file until destination integrity is cryptographically verified.
    * Does NOT assume EPERM means EXDEV.
    */
@@ -69,14 +69,23 @@ export class FileExecutor {
       return this.crossVolumeMove(sourcePath, destinationPath, expectedFingerprint);
     }
 
-    // Try standard atomic rename first (efficient for same-volume moves)
+    // Create the destination link atomically. Unlike rename(), link() refuses
+    // to replace a destination that appeared after the preflight collision check.
     try {
-      await fs.promises.rename(sourcePath, destinationPath);
+      await fs.promises.link(sourcePath, destinationPath);
 
-      // Verify destination after rename
+      // Verify destination after linking
       const destFingerprint = await computeFileFingerprint(destinationPath);
       if (destFingerprint.sha256 !== expectedFingerprint.sha256) {
-        throw new Error('Destination file fingerprint does not match source fingerprint after rename.');
+        await fs.promises.unlink(destinationPath).catch(() => {});
+        throw new Error('Destination file fingerprint does not match source fingerprint after linking.');
+      }
+
+      try {
+        await fs.promises.unlink(sourcePath);
+      } catch (unlinkErr) {
+        await fs.promises.unlink(destinationPath).catch(() => {});
+        throw new Error(`Failed to remove original source file: ${sanitizeError(unlinkErr)}`);
       }
       return destFingerprint;
     } catch (err: unknown) {
@@ -112,8 +121,10 @@ export class FileExecutor {
         throw new Error('Copied file checksum does not match original source file.');
       }
 
-      // 3. Move temp file to final destination
-      await fs.promises.rename(tempDest, destinationPath);
+       // 3. Link the temporary file into the final destination without
+       // replacing a destination that appeared after the initial collision check.
+       await fs.promises.link(tempDest, destinationPath);
+       await fs.promises.unlink(tempDest);
 
       // 4. Verify final destination exists and matches
       const finalFingerprint = await computeFileFingerprint(destinationPath);
@@ -199,6 +210,15 @@ export class FileExecutor {
         continue;
       }
 
+      if (item.appliedOperationId) {
+        skipped.push({
+          itemId,
+          filename: originalFilename,
+          reason: 'Item has already been applied. Rescan the folder before organizing it again.'
+        });
+        continue;
+      }
+
       const activeProposal = item.userEditedProposal || item.proposal;
       if (!activeProposal) {
         skipped.push({
@@ -249,6 +269,15 @@ export class FileExecutor {
 
       // 5. Verify source existence and regular file check
       let currentSourceFp: SourceFingerprint;
+      if (!item.sourceFingerprint?.sha256) {
+        failed.push({
+          itemId,
+          filename: originalFilename,
+          error: 'Source fingerprint is missing. Rescan the folder before executing this item.'
+        });
+        continue;
+      }
+
       try {
         currentSourceFp = await computeFileFingerprint(sourceAbsPath);
       } catch (statErr) {
@@ -286,6 +315,16 @@ export class FileExecutor {
           itemId,
           filename: originalFilename,
           error: `Invalid destination path: ${sanitizeError(destErr)}`
+        });
+        continue;
+      }
+
+      const destinationEscaping = await isSymlinkEscaping(normRoot, safeDestPath);
+      if (destinationEscaping) {
+        failed.push({
+          itemId,
+          filename: originalFilename,
+          error: 'Security violation: destination is or traverses a symlink/junction escaping the selected root directory.'
         });
         continue;
       }
@@ -331,6 +370,22 @@ export class FileExecutor {
         continue;
       }
 
+      // Re-check immediately before touching the filesystem. This narrows the
+      // race window in which a directory junction could be inserted after the
+      // initial destination preflight.
+      if (await isSymlinkEscaping(normRoot, safeDestPath)) {
+        const securityError = new Error(
+          'Destination is or traverses a symlink/junction escaping the selected root directory.'
+        );
+        await this.journal.recordFailure(opId, securityError);
+        failed.push({
+          itemId,
+          filename: originalFilename,
+          error: `Security violation: ${securityError.message}`
+        });
+        continue;
+      }
+
       // 10. Execute the file move
       try {
         const destFp = await this.safeMoveFile(sourceAbsPath, safeDestPath, currentSourceFp);
@@ -339,10 +394,15 @@ export class FileExecutor {
         successful.push(completedOp);
       } catch (moveErr) {
         await this.journal.recordFailure(opId, moveErr);
+        const moveCode = (moveErr as { code?: string })?.code;
+        const isCollision = moveCode === 'EEXIST';
         failed.push({
           itemId,
           filename: originalFilename,
-          error: `Execution error during move: ${sanitizeError(moveErr)}`
+          error: isCollision
+            ? `Destination collision: a file appeared at "${destRelPath}" before the move completed. Edit filename or destination to resolve.`
+            : `Execution error during move: ${sanitizeError(moveErr)}`,
+          isCollision
         });
       }
     }
@@ -376,6 +436,13 @@ export class FileExecutor {
 
     const destPath = normalizePath(op.destinationAbsolutePath);
     const sourcePath = normalizePath(op.sourceAbsolutePath);
+
+    if (await isSymlinkEscaping(op.rootPath, destPath) || await isSymlinkEscaping(op.rootPath, sourcePath)) {
+      return {
+        success: false,
+        error: 'Security violation: undo path is or traverses a symlink/junction escaping the recorded root directory.'
+      };
+    }
 
     // 1. Confirm destination still exists
     if (!(await pathExists(destPath))) {

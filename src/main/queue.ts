@@ -135,11 +135,24 @@ export class InferenceQueue {
     if (!item) return false;
 
     if (editedProposal) {
-      item.userEditedProposal = editedProposal;
+      if (item.analysisStatus !== 'completed') {
+        return false;
+      }
+
+      const validation = validateModelOutput(editedProposal);
+      if (!validation.isValid || !validation.sanitized) {
+        return false;
+      }
+
+      item.userEditedProposal = validation.sanitized;
       item.reviewStatus = 'edited';
       // Proposal edit strictly invalidates previous approval
       item.approvedProposalSignature = undefined;
     } else if (status === 'approved') {
+      if (item.analysisStatus !== 'completed') {
+        return false;
+      }
+
       const activeProposal = item.userEditedProposal || item.proposal;
       if (!activeProposal) {
         return false;
@@ -151,6 +164,8 @@ export class InferenceQueue {
         activeProposal.proposedDestination,
         activeProposal.suggestedFilename
       );
+    } else if (status === 'edited') {
+      return false;
     } else {
       item.reviewStatus = status;
       item.approvedProposalSignature = undefined;

@@ -233,13 +233,13 @@ async function runReleaseAudit() {
     fs.writeFileSync(lockTestFile, 'Content to test lock handling');
     const lockFp = await computeFileFingerprint(lockTestFile);
 
-    // Mock rename to simulate an EPERM / EBUSY error on the SAME volume (e.g. file locked by another program)
-    const originalRename = fs.promises.rename;
-    try {
-      (fs.promises as any).rename = async () => {
-        const err: any = new Error('EPERM: operation not permitted');
-        err.code = 'EPERM';
-        throw err;
+    // Mock link to simulate an EPERM / EBUSY error on the SAME volume (e.g. file locked by another program)
+     const originalLink = fs.promises.link;
+     try {
+       (fs.promises as any).link = async () => {
+         const err: any = new Error('EPERM: operation not permitted');
+         err.code = 'EPERM';
+         throw err;
       };
 
       let threwExpectedError = false;
@@ -253,9 +253,9 @@ async function runReleaseAudit() {
       }
       assert('EPERM on same volume throws cleanly and does NOT fall back to cross-volume copy', threwExpectedError);
       assert('Original locked file was preserved untouched', fs.existsSync(lockTestFile));
-    } finally {
-      (fs.promises as any).rename = originalRename;
-    }
+     } finally {
+       (fs.promises as any).link = originalLink;
+     }
 
     // ------------------------------------------------------------------------
     // SECTION 4: Security Protections & Forged Request Rejection

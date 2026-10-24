@@ -56,6 +56,9 @@ export function sanitizeError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   // Redact potential inline token or secret patterns if present
   return raw
-    .replace(/(?:key|token|secret|password|pwd)=([^\s&]+)/gi, '$1=[REDACTED]')
+    .replace(/(?:key|token|secret|password|pwd)=([^\s&]+)/gi, (match) => {
+      const key = match.slice(0, match.indexOf('='));
+      return `${key}=[REDACTED]`;
+    })
     .slice(0, 300);
 }

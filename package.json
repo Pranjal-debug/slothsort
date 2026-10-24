@@ -1,6 +1,6 @@
 {
   "name": "slothsort",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "SlothSort — Privacy-first Windows desktop AI file organizer (Hacktoberfest 2026)",
   "main": "dist/main/main.js",
@@ -10,12 +10,14 @@
     "build:renderer": "vite build",
     "build:main": "tsc -p tsconfig.node.json",
     "start": "electron .",
-    "test": "npm run test:validator && npm run test:scanner && npm run test:queue && npm run test:executor",
+    "test": "npm run test:validator && npm run test:scanner && npm run test:queue && npm run test:executor && npm run test:audit && npm run test:hardening",
     "test:validator": "tsx src/testValidator.ts",
     "test:scanner": "tsx test/scanner.test.ts",
     "test:queue": "tsx test/queue.test.ts",
     "test:executor": "tsx test/executor.test.ts",
     "test:audit": "tsx test/releaseAudit.test.ts",
+    "test:hardening": "tsx --test test/hardening.test.ts",
+    "test:windows-hardening": "tsx --test test/windowsHardening.test.ts",
     "test:integration": "tsx test/queueIntegration.test.ts",
     "test:offline": "tsx src/testOffline.ts",
     "package": "npm run build && npx electron-builder --win --dir",
@@ -28,7 +30,9 @@
       "output": "dist/package"
     },
     "files": [
-      "dist/**/*",
+      "dist/*.js",
+      "dist/main/**/*",
+      "dist/renderer/**/*",
       "package.json"
     ],
     "win": {

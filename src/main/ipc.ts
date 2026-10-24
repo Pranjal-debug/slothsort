@@ -1,8 +1,6 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { OllamaClient } from '../ollamaClient.js';
 import {
-  ALLOWED_CATEGORIES,
-  AllowedCategory,
   ExecutionResult,
   OllamaStatus,
   OperationRecord,
@@ -12,7 +10,7 @@ import {
   ScanResult,
   StagedItem
 } from '../types.js';
-import { validateDestination, validateFilename } from '../validator.js';
+import { validateModelOutput } from '../validator.js';
 import { FileExecutor } from './executor.js';
 import { UndoJournal } from './journal.js';
 import { normalizePath } from './pathSecurity.js';
@@ -176,31 +174,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       let sanitizedEdit: SanitizedClassification | undefined;
       if (editedProposal && typeof editedProposal === 'object') {
         const p = editedProposal as Partial<SanitizedClassification>;
-        if (!p.category || !ALLOWED_CATEGORIES.includes(p.category as AllowedCategory)) {
-          throw new Error(`Invalid category for edit: "${p.category}"`);
-        }
-        if (!p.suggestedFilename) {
-          throw new Error('Suggested filename is required.');
-        }
-        const nameCheck = validateFilename(p.suggestedFilename);
-        if (!nameCheck.isValid) {
-          throw new Error(`Invalid filename: ${nameCheck.error}`);
-        }
-        if (!p.proposedDestination) {
-          throw new Error('Proposed destination is required.');
-        }
-        const destCheck = validateDestination(p.proposedDestination);
-        if (!destCheck.isValid) {
-          throw new Error(`Invalid destination: ${destCheck.error}`);
-        }
-
-        sanitizedEdit = {
-          category: p.category as AllowedCategory,
-          suggestedFilename: p.suggestedFilename.trim(),
-          proposedDestination: p.proposedDestination.trim().replace(/\\/g, '/'),
-          confidence: p.confidence || 'high',
-          reasoning: p.reasoning?.trim() || 'User manually edited this proposal.'
+        const candidate = {
+          category: p.category,
+          suggestedFilename: p.suggestedFilename,
+          proposedDestination: p.proposedDestination,
+          confidence: p.confidence ?? 'high',
+          reasoning: p.reasoning ?? 'User manually edited this proposal.'
         };
+        const validation = validateModelOutput(candidate);
+        if (!validation.isValid || !validation.sanitized) {
+          throw new Error(`Invalid edited proposal: ${validation.errors.join('; ')}`);
+        }
+        sanitizedEdit = validation.sanitized;
       }
 
       const queue = getQueue(mainWindow);
